@@ -31,8 +31,16 @@ LOGIN_FAILURES = {}
 DEMO_CERT = "VMX-CERT-MAH-2026-00428"
 DEMO_SERIAL = "AYI6702-2401-0789"
 DEMO_INSTRUMENT = "VMX-INS-00001"
-DEMO_OFFICER_EMAIL = os.getenv("VERIMETRIX_DEMO_OFFICER_EMAIL", "officer@verimetrix.local")
-DEMO_OFFICER_PASSWORD = os.getenv("VERIMETRIX_DEMO_OFFICER_PASSWORD", "")
+DEMO_OFFICER_EMAIL = os.getenv(
+    "VERIMETRIX_DEMO_OFFICER_EMAIL",
+    "naren@legalmetrology.com"
+).strip().lower()
+
+# Fixed testing password. For production, move this to a Vercel Environment Variable.
+DEMO_OFFICER_PASSWORD = os.getenv(
+    "VERIMETRIX_DEMO_OFFICER_PASSWORD",
+    "naren142727"
+)
 
 SCHEMA = """
 PRAGMA foreign_keys=ON;
@@ -254,24 +262,28 @@ def seed():
         report_count = qone(c,"SELECT COUNT(*) n FROM reports WHERE status='OPEN'")["n"]
         for idx in range(report_count + 1, 5):
             c.execute("INSERT INTO reports (id,issue_type,description,qr_identifier,reporter_contact,status,resolution_notes,created_at,priority) VALUES (?,?,?,?,?,?,?,?,?)", (str(uuid.uuid4()),"DEMO_REVIEW","Synthetic demonstration issue",DEMO_INSTRUMENT,"demo@example.test","OPEN",None,now(),"MEDIUM"))
-        # Keep the provisioned officer credentials synchronized with the
-        # deployment environment. The plaintext password is never stored in
-        # source code; Vercel supplies VERIMETRIX_DEMO_OFFICER_PASSWORD.
+        # ------------------------------------------------------------
+        # SINGLE FIXED TESTING OFFICER
+        # ------------------------------------------------------------
+        # Keep exactly one active officer account for the testing deployment.
+        # Existing officer rows are retained for referential integrity, but
+        # every other officer is disabled.
         email = DEMO_OFFICER_EMAIL
-        officer = qone(
-            c,
-            "SELECT id,password_hash FROM officers WHERE email=?",
-            (email,)
+
+        c.execute(
+            "UPDATE officers SET active=0 WHERE lower(email)<>?",
+            (email.lower(),)
         )
 
-        if not officer:
-            active = 1 if DEMO_OFFICER_PASSWORD else 0
-            password_hash = (
-                hash_password(DEMO_OFFICER_PASSWORD)
-                if DEMO_OFFICER_PASSWORD
-                else None
-            )
+        officer = qone(
+            c,
+            "SELECT id FROM officers WHERE lower(email)=?",
+            (email.lower(),)
+        )
 
+        password_hash = hash_password(DEMO_OFFICER_PASSWORD)
+
+        if not officer:
             c.execute(
                 "INSERT INTO officers VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (
@@ -282,27 +294,35 @@ def seed():
                     "Maharashtra",
                     "Pune",
                     "ADMIN",
-                    active,
+                    1,
                     password_hash,
                     now(),
                 ),
             )
-        elif DEMO_OFFICER_PASSWORD:
-            # Always synchronize the configured deployment password.
-            # Only the PBKDF2 hash is written to Supabase.
+        else:
             c.execute(
                 """
                 UPDATE officers
                 SET password_hash=?,
                     active=1,
+                    full_name=?,
+                    office=?,
+                    state=?,
+                    district=?,
                     role='ADMIN'
-                WHERE email=?
+                WHERE lower(email)=?
                 """,
                 (
-                    hash_password(DEMO_OFFICER_PASSWORD),
-                    email,
+                    password_hash,
+                    "Demo Verification Officer",
+                    "Pune Legal Metrology Office",
+                    "Maharashtra",
+                    "Pune",
+                    "ADMIN",
+                    email.lower(),
                 ),
             )
+
         if qone(c,"SELECT id FROM gatc_centres LIMIT 1") is None:
             for code,name,state,district,cats in [("GATC-MH-001","Pune Standards Centre","Maharashtra","Pune",["Weighing Instruments","Non-automatic weighing instrument"]),("GATC-MH-002","Mumbai Verification Lab","Maharashtra","Mumbai",["Weighing Instruments"]),("GATC-KA-001","Bengaluru Measurement Centre","Karnataka","Bengaluru",["Weighing Instruments","Fuel Dispensers"])]:
                 c.execute("INSERT INTO gatc_centres (id,centre_code,name,state,district,address,approved_categories,capacity,active,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",(str(uuid.uuid4()),code,name,state,district,district,json.dumps(cats),20,1,now()))
